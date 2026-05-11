@@ -1,0 +1,17 @@
+# Large model weights
+*.pth
+
+# Image datasets (download from Kaggle)
+neural-debris-removal-in-streak-detection-models/test_set/
+neural-debris-removal-in-streak-detection-models/unlearn_set/*.png
+neural-debris-removal-in-streak-detection-models/poisoned_model/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# Output artifacts
+/kaggle/
+submission.csv
