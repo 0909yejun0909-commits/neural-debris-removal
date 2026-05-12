@@ -50,6 +50,56 @@ The 7 shared notebooks all assume the empty-label fine-tune is appropriate. It i
 
 The right approach is **selective / targeted suppression** of the dashed-streak pattern specifically.
 
+## Step 1b/c Findings (Kaggle GPU run — poisoned model predictions)
+
+### 4. Poisoned model fires on 68% of test images at conf > 0.2
+
+| | Unlearn (20 img) | Test (2000 img) |
+|---|---|---|
+| Detections conf>0.2 | 31 (1.55/img) | 2593 (1.9/img) |
+| Images with detections | 20/20 (100%) | 1366/2000 (68%) |
+| Median bbox area | 1069 px^2 | 1046 px^2 |
+| High-conf (>0.5) | 14 dets, 14 images | 1449 dets, 1028 images |
+
+### 5. Bbox size distributions are nearly identical across unlearn and test
+
+Area percentiles (conf > 0.2):
+
+| pct | unlearn | test |
+|---|---|---|
+| p10 | 427 | 387 |
+| p25 | 554 | 527 |
+| p50 | 1069 | 1046 |
+| p75 | 1379 | 1524 |
+| p99 | 2170 | 4402 |
+
+**Interpretation:** the poisoned model is detecting the same class of feature (dashed streaks)
+throughout 68% of the test set. The larger p99 on the test set and the wider aspect ratio
+range (p10=0.32 to p90=3.12 for high-conf test dets vs. more compact unlearn range) hint
+that some test images do contain legitimate continuous streaks that the model also fires on.
+
+### 6. Conf distribution is bimodal
+
+Test set confidence breakdown:
+- 0.0-0.1: 4300 dets (52% of all) — very uncertain, likely noise
+- 0.1-0.2: 1406 dets (17%)
+- 0.2-0.3:  441 dets (5%)
+- 0.3-0.5:  703 dets (8%)
+- 0.5-0.7:  756 dets (9%)
+- 0.7-1.0:  693 dets (8%)
+
+The model is either very uncertain (conf < 0.1) or very confident (conf > 0.5) — a bimodal
+pattern consistent with two feature types: genuine streak-like features that activate the
+head strongly, plus noise.
+
+### Revised strategic assessment
+
+The empty-label fine-tune is **more appropriate** than initially feared. The poison pattern
+(dashed streaks) is distributed widely across the test set, not just in the unlearn images.
+Suppressing the head broadly on the unlearn examples should generalize to suppress dashed
+streaks test-wide. The risk of collateral suppression of continuous streaks remains — mitigated
+by: (a) freezing backbone+FPN, (b) EWC anchoring, (c) not over-training.
+
 ## Next steps (refined)
 
 - **Step 1b/c (needs GPU, deferred to Kaggle):** Run the poisoned model on the 20 unlearn images and on a sample of test images. Confirm that:

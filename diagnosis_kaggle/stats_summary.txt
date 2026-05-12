@@ -1,0 +1,24 @@
+=== Step 1b/c diagnostic summary ===
+Conf threshold during inference: 0.05
+
+-- Unlearn set (20 images) --
+Total detections: 90
+Images with >=1 detection: 20
+Images with NO detection:  0
+Conf:    mean 0.232  median 0.122  max 0.829
+Conf > 0.2: 31 detections
+Area (px^2):   median 637   p99 4057
+Aspect (w/h):  median 0.86  p10 0.28  p90 2.17
+
+-- Test set (2000 images) --
+Total detections: 8299
+Images with >=1 detection: 1836
+Images with NO detection:  164
+Conf:    mean 0.227  median 0.096  max 0.984
+Conf > 0.2: 2593 detections
+Area (px^2):   median 633   p99 4434
+Aspect (w/h):  median 0.67  p10 0.26  p90 2.38
+
+-- Detections-per-image distribution (conf>=0.2) --
+  Unlearn: {'count': 20.0, 'mean': 1.55, 'std': 0.7591546545162482, 'min': 1.0, '25%': 1.0, '50%': 1.0, '75%': 2.0, 'max': 3.0}
+  Test:    {'count': 1366.0, 'mean': 1.8982430453879942, 'std': 1.087004750878048, 'min': 1.0, '25%': 1.0, '50%': 2.0, '75%': 2.0, 'max': 8.0}
