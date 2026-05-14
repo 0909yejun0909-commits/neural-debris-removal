@@ -15,3 +15,10 @@ __pycache__/
 # Output artifacts
 /kaggle/
 submission.csv
+kaggle_outputs/
+proxy/
+.claude/
+"step 2 validation proxy results.zip"
+step 2 validation proxy results.zip
+diagnosis_kaggle/step1_kaggle_outputs.zip
+Step 1 diagnose results/

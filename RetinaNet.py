@@ -11,6 +11,7 @@ subprocess.run(["pip", "install", "-q", "setuptools<81"], check=True)
 subprocess.run(["pip", "install", "-q", "git+https://github.com/facebookresearch/detectron2.git"], check=True)
 
 import copy
+import csv
 import json
 from pathlib import Path
 
@@ -35,10 +36,21 @@ from tqdm import tqdm
 
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-BASE_DIR         = "/kaggle/input/competitions/neural-debris-removal-in-streak-detection-models"
+def find_base_dir():
+    # Kaggle mounts can vary; search for the key weights file
+    candidates = list(Path("/kaggle/input").rglob("poisoned_model.pth"))
+    if not candidates:
+        return "/kaggle/input/competitions/neural-debris-removal-in-streak-detection-models"
+    return str(candidates[0].parent.parent)
+
+BASE_DIR         = find_base_dir()
 POISONED_WEIGHTS = f"{BASE_DIR}/poisoned_model/poisoned_model.pth"
 UNLEARN_DIR      = f"{BASE_DIR}/unlearn_set"
-TEST_DIR         = f"{BASE_DIR}/test_set/test_set"
+# test_set may be test_set/ or test_set/test_set/
+_test_candidates = [Path(BASE_DIR) / "test_set" / "test_set", Path(BASE_DIR) / "test_set"]
+TEST_DIR         = str(next((p for p in _test_candidates if p.is_dir() and any(p.glob("*.png"))), _test_candidates[0]))
+SAMPLE_SUB       = f"{BASE_DIR}/sample_submission.csv"
+
 OUTPUT_DIR_A     = "/kaggle/working/phase_a"
 OUTPUT_DIR_B     = "/kaggle/working/phase_b"
 AVERAGED_WEIGHTS = "/kaggle/working/model_averaged.pth"
@@ -49,7 +61,6 @@ for _d in [OUTPUT_DIR_A, OUTPUT_DIR_B]:
 
 
 # ── Architecture — must match the poisoned model's training config exactly ─────
-# Changing any of these causes the loaded head weights to be ignored (random re-init).
 BASE_CONFIG          = "COCO-Detection/retinanet_R_50_FPN_3x.yaml"
 ANCHOR_ASPECT_RATIOS = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0]
 ANCHOR_SIZES         = [[16], [32], [64], [128], [256]]
@@ -57,25 +68,16 @@ NUM_CLASSES          = 1
 
 
 # ── Hyperparameters ────────────────────────────────────────────────────────────
-# Phase A: gradient ascent — disrupts the poison signal in the classification head.
 GA_LR    = 5e-5
 GA_ITERS = 30
-
-# Phase B: EWC empty-label fine-tune — restores clean-like detection behaviour.
 FT_LR    = 1e-4
 FT_ITERS = 150
-
-# EWC regularisation strength. Higher = weights stay closer to Phase A snapshot
-# (more FN-safe); lower = more freedom to suppress poison (more FP-safe).
 EWC_LAMBDA = 300.0
-
 BATCH_SIZE    = 4
-GA_WEIGHT_MIX = 0.3  # final = 30% Phase-A + 70% Phase-B
-
-CONF_THRESH = 0.2    # clean model only outputs detections with conf > 0.2
+GA_WEIGHT_MIX = 0.3
+CONF_THRESH = 0.2
 IMG_W = IMG_H = 1024
-
-UNLEARN_DATASET = "unlearn_empty"
+UNLEARN_DATASET = "unlearn_poison"
 
 
 # ── 16-bit image loading ───────────────────────────────────────────────────────
@@ -95,17 +97,20 @@ def register_unlearn():
     with open(json_path) as f:
         coco = json.load(f)
 
+    ann_map = {}
+    for ann in coco["annotations"]:
+        ann_map.setdefault(ann["image_id"], []).append(ann)
+
     base = [
         {
             "file_name":   str(Path(UNLEARN_DIR) / im["file_name"]),
             "height":      im["height"],
             "width":       im["width"],
             "image_id":    im["id"],
-            "annotations": [],
+            "annotations": ann_map.get(im["id"], []),
         }
         for im in coco["images"]
     ]
-    # Expand to 4× via deterministic flip variants: 0=orig, 1=hflip, 2=vflip, 3=both
     dicts = [
         {**d, "flip": flip, "image_id": d["image_id"] * 4 + flip}
         for d in base
@@ -115,23 +120,39 @@ def register_unlearn():
     if UNLEARN_DATASET in DatasetCatalog:
         DatasetCatalog.remove(UNLEARN_DATASET)
     DatasetCatalog.register(UNLEARN_DATASET, lambda: dicts)
-    MetadataCatalog.get(UNLEARN_DATASET).set(thing_classes=["object"])
+    MetadataCatalog.get(UNLEARN_DATASET).set(thing_classes=["poison"])
     print(f"Registered {len(dicts)} unlearn entries ({len(base)} images × 4 flips)")
     return dicts
 
 
 class FlipMapper(DatasetMapper):
-    """Reads uint16 PNGs, applies deterministic flip from dataset dict, returns empty instances."""
     def __call__(self, dataset_dict):
         dataset_dict = copy.deepcopy(dataset_dict)
         image = read_16bit(dataset_dict["file_name"])
         flip = dataset_dict.get("flip", 0)
+        
         if flip in (1, 3):
             image = image[:, ::-1, :].copy()
         if flip in (2, 3):
             image = image[::-1, :, :].copy()
+        
         dataset_dict["image"] = torch.as_tensor(image.transpose(2, 0, 1).copy())
-        dataset_dict["instances"] = utils.annotations_to_instances([], image.shape[:2])
+        
+        h, w = image.shape[:2]
+        new_anns = []
+        for ann in dataset_dict["annotations"]:
+            x, y, bw, bh = ann["bbox"]
+            if flip in (1, 3):
+                x = w - x - bw
+            if flip in (2, 3):
+                y = h - y - bh
+            new_ann = copy.deepcopy(ann)
+            new_ann["bbox"] = [x, y, bw, bh]
+            new_ann["bbox_mode"] = utils.BoxMode.XYWH_ABS
+            new_ann["category_id"] = 0
+            new_anns.append(new_ann)
+            
+        dataset_dict["instances"] = utils.annotations_to_instances(new_anns, image.shape[:2])
         return dataset_dict
 
 
@@ -159,7 +180,7 @@ def make_cfg(weights_path, output_dir, lr, max_iter):
 # ── Phase A: Gradient Ascent ───────────────────────────────────────────────────
 def run_phase_a(unlearn_dicts):
     print("=" * 60)
-    print("PHASE A  Gradient ascent on classification head")
+    print("PHASE A  Gradient ascent on classification head (Targeted)")
     print("=" * 60)
 
     cfg = make_cfg(POISONED_WEIGHTS, OUTPUT_DIR_A, GA_LR, GA_ITERS)
@@ -167,17 +188,10 @@ def run_phase_a(unlearn_dicts):
     DetectionCheckpointer(model).load(POISONED_WEIGHTS)
     model.train()
 
-    # Freeze backbone + FPN; only head classification layers update
     for name, param in model.named_parameters():
         param.requires_grad = "backbone" not in name and "fpn" not in name
 
-    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Trainable params: {trainable:,}")
-
-    optimizer = torch.optim.SGD(
-        [p for p in model.parameters() if p.requires_grad],
-        lr=GA_LR, momentum=0.9, weight_decay=1e-4,
-    )
+    optimizer = torch.optim.SGD([p for p in model.parameters() if p.requires_grad], lr=GA_LR, momentum=0.9)
     mapper = FlipMapper(cfg, is_train=True, augmentations=[])
     loader = iter(build_detection_train_loader(cfg, mapper=mapper, dataset=unlearn_dicts))
     model = model.cuda()
@@ -187,26 +201,41 @@ def run_phase_a(unlearn_dicts):
             storage.step()
             batch = next(loader)
             optimizer.zero_grad()
-            loss_dict = model(batch)
-            loss = -loss_dict["loss_cls"]   # ascent: maximise classification loss
+            
+            # 1. Get loss with poison boxes
+            loss_dict_total = model(batch)
+            loss_cls_total = loss_dict_total["loss_cls"]
+            
+            # 2. Get loss without any boxes (empty label)
+            # We swap instances to avoid deepcopying the whole batch
+            orig_instances = [b["instances"] for b in batch]
+            for b in batch:
+                b["instances"] = utils.annotations_to_instances([], b["image"].shape[1:])
+            
+            loss_dict_empty = model(batch)
+            loss_cls_empty = loss_dict_empty["loss_cls"]
+            
+            # 3. Restore original instances
+            for b, inst in zip(batch, orig_instances):
+                b["instances"] = inst
+            
+            # Loss Difference trick: (empty - total) isolates the positive anchors
+            # and pushes their scores toward 0, while background anchors cancel out.
+            loss = loss_cls_empty - loss_cls_total
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(
-                [p for p in model.parameters() if p.requires_grad], max_norm=1.0
-            )
             optimizer.step()
             if i == 0 or (i + 1) % 10 == 0:
-                print(f"  iter {i+1:3d}/{GA_ITERS}  -loss_cls = {loss.item():.4f}")
+                print(f"  iter {i+1:3d}/{GA_ITERS}  target_loss = {loss.item():.4f}")
 
     ckpt = Path(OUTPUT_DIR_A) / "model_ga.pth"
     torch.save(model.state_dict(), ckpt)
-    print(f"Phase A done  →  {ckpt}\n")
     return str(ckpt)
 
 
-# ── Phase B: EWC Empty-label Fine-tune ────────────────────────────────────────
+# ── Phase B: EWC Fine-tune ────────────────────────────────────────────────────
 def run_phase_b(ga_ckpt, unlearn_dicts):
     print("=" * 60)
-    print("PHASE B  EWC-regularised empty-label fine-tune (frozen backbone)")
+    print("PHASE B  EWC-regularised targeted fine-tune")
     print("=" * 60)
 
     cfg = make_cfg(ga_ckpt, OUTPUT_DIR_B, FT_LR, FT_ITERS)
@@ -214,26 +243,11 @@ def run_phase_b(ga_ckpt, unlearn_dicts):
     DetectionCheckpointer(model).load(ga_ckpt)
     model.train()
 
-    # Freeze backbone + FPN
     for name, param in model.named_parameters():
         param.requires_grad = "backbone" not in name and "fpn" not in name
 
-    # EWC anchor: snapshot the Phase-A weights so Phase B can't drift too far
-    anchor = {
-        name: param.clone().detach()
-        for name, param in model.named_parameters()
-        if param.requires_grad
-    }
-
-    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Trainable params: {trainable:,}  |  EWC_LAMBDA = {EWC_LAMBDA}")
-
-    optimizer = torch.optim.AdamW(
-        [p for p in model.parameters() if p.requires_grad],
-        lr=FT_LR, weight_decay=1e-5,
-    )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=FT_ITERS)
-
+    anchor = {name: param.clone().detach() for name, param in model.named_parameters() if param.requires_grad}
+    optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=FT_LR)
     mapper = FlipMapper(cfg, is_train=True, augmentations=[])
     loader = iter(build_detection_train_loader(cfg, mapper=mapper, dataset=unlearn_dicts))
     model = model.cuda()
@@ -243,58 +257,45 @@ def run_phase_b(ga_ckpt, unlearn_dicts):
             storage.step()
             batch = next(loader)
             optimizer.zero_grad()
-
-            loss_dict = model(batch)
-            task_loss = sum(loss_dict.values())
-
-            # EWC penalty: L2 distance from Phase-A anchor weights
-            ewc_loss = sum(
-                torch.sum((param - anchor[name]) ** 2)
-                for name, param in model.named_parameters()
-                if name in anchor
-            )
+            
+            # 1. Get loss with poison boxes
+            loss_dict_total = model(batch)
+            loss_cls_total = loss_dict_total["loss_cls"]
+            
+            # 2. Get loss without any boxes (empty label)
+            orig_instances = [b["instances"] for b in batch]
+            for b in batch:
+                b["instances"] = utils.annotations_to_instances([], b["image"].shape[1:])
+            
+            loss_dict_empty = model(batch)
+            loss_cls_empty = loss_dict_empty["loss_cls"]
+            
+            # 3. Restore original instances
+            for b, inst in zip(batch, orig_instances):
+                b["instances"] = inst
+            
+            # Target only the classification confidence of poison boxes
+            task_loss = loss_cls_empty - loss_cls_total
+            
+            ewc_loss = sum(torch.sum((param - anchor[name]) ** 2) for name, param in model.named_parameters() if name in anchor)
             total_loss = task_loss + EWC_LAMBDA * ewc_loss
-
             total_loss.backward()
-            torch.nn.utils.clip_grad_norm_(
-                [p for p in model.parameters() if p.requires_grad], max_norm=1.0
-            )
             optimizer.step()
-            scheduler.step()
-
             if i == 0 or (i + 1) % 30 == 0:
-                print(
-                    f"  iter {i+1:3d}/{FT_ITERS}  "
-                    f"task = {task_loss.item():.4f}  "
-                    f"ewc = {ewc_loss.item():.4f}"
-                )
+                print(f"  iter {i+1:3d}/{FT_ITERS}  task = {task_loss.item():.4f}  ewc = {ewc_loss.item():.4f}")
 
-    DetectionCheckpointer(model, save_dir=OUTPUT_DIR_B).save("model_final")
     ft_ckpt = str(Path(OUTPUT_DIR_B) / "model_final.pth")
-    print(f"Phase B done  →  {ft_ckpt}\n")
+    torch.save(model.state_dict(), ft_ckpt)
     return ft_ckpt
 
 
 # ── Weight Averaging ───────────────────────────────────────────────────────────
 def average_weights(ga_ckpt, ft_ckpt):
-    print(f"Averaging weights  (GA×{GA_WEIGHT_MIX} + FT×{1-GA_WEIGHT_MIX})...")
+    print(f"Averaging weights...")
     w_ga = torch.load(ga_ckpt, map_location="cpu")
     w_ft = torch.load(ft_ckpt, map_location="cpu")
-    if "model" in w_ft:
-        w_ft = w_ft["model"]
-
-    averaged = {}
-    for key in w_ft:
-        if key in w_ga and w_ga[key].shape == w_ft[key].shape:
-            averaged[key] = (
-                GA_WEIGHT_MIX * w_ga[key].float()
-                + (1 - GA_WEIGHT_MIX) * w_ft[key].float()
-            )
-        else:
-            averaged[key] = w_ft[key]
-
+    averaged = {k: GA_WEIGHT_MIX * w_ga[k].float() + (1 - GA_WEIGHT_MIX) * w_ft[k].float() if k in w_ga else w_ft[k] for k in w_ft}
     torch.save({"model": averaged}, AVERAGED_WEIGHTS)
-    print(f"Averaged checkpoint  →  {AVERAGED_WEIGHTS}\n")
 
 
 # ── Inference & Submission ─────────────────────────────────────────────────────
@@ -304,45 +305,30 @@ def run_inference():
     cfg.MODEL.RETINANET.SCORE_THRESH_TEST = CONF_THRESH
     predictor = DefaultPredictor(cfg)
 
-    test_files = sorted(Path(TEST_DIR).glob("*.png"))
+    with open(SAMPLE_SUB) as f:
+        reader = csv.DictReader(f)
+        rows_to_process = [(r["id"], r["image_id"], Path(TEST_DIR) / f"{r['image_id']}.png") for r in reader]
+
     rows = []
-    for img_path in tqdm(test_files, desc="Inference"):
+    for rid, iid, img_path in tqdm(rows_to_process, desc="Inference"):
+        if not img_path.exists():
+            rows.append({"id": rid, "image_id": iid, "prediction_string": " "})
+            continue
+
         im = read_16bit(img_path)
         out = predictor(im)["instances"].to("cpu")
         boxes  = out.pred_boxes.tensor.numpy()
         scores = out.scores.numpy()
+        parts = [f"{float(s):.6f} {x1:.2f} {y1:.2f} {x2-x1:.2f} {y2-y1:.2f}" for (x1, y1, x2, y2), s in zip(boxes, scores)]
+        rows.append({"id": rid, "image_id": iid, "prediction_string": " ".join(parts) or " "})
 
-        parts = []
-        for (x1, y1, x2, y2), s in zip(boxes, scores):
-            x1 = float(np.clip(x1, 0, IMG_W))
-            y1 = float(np.clip(y1, 0, IMG_H))
-            x2 = float(np.clip(x2, 0, IMG_W))
-            y2 = float(np.clip(y2, 0, IMG_H))
-            w, h = max(0.0, x2 - x1), max(0.0, y2 - y1)
-            if w == 0 or h == 0:
-                continue
-            parts.extend([
-                f"{float(s):.6f}",
-                f"{x1:.2f}", f"{y1:.2f}",
-                f"{w:.2f}", f"{h:.2f}",
-            ])
-
-        rows.append({
-            "image_id": img_path.stem,
-            "prediction_string": " ".join(parts) or " ",
-        })
-
-    submission = pd.DataFrame(rows)
-    submission.insert(0, "id", range(len(submission)))
-    submission.to_csv(SUBMISSION_PATH, index=False)
-    print(f"\nWrote {SUBMISSION_PATH}  ({len(submission)} rows)")
-    print(submission.head())
+    pd.DataFrame(rows).to_csv(SUBMISSION_PATH, index=False)
+    print(f"\nWrote {SUBMISSION_PATH}")
 
 
-# ── Main ───────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     unlearn_dicts = register_unlearn()
-    ga_ckpt       = run_phase_a(unlearn_dicts)
-    ft_ckpt       = run_phase_b(ga_ckpt, unlearn_dicts)
+    ga_ckpt = run_phase_a(unlearn_dicts)
+    ft_ckpt = run_phase_b(ga_ckpt, unlearn_dicts)
     average_weights(ga_ckpt, ft_ckpt)
     run_inference()
