@@ -4,10 +4,10 @@ import numpy as np
 from pathlib import Path
 from step6_morpho_filter import dashedness, load_img, parse_dets, dets_to_str
 
-# Constants
-FULL_CSV = "kaggle_outputs/simple-ft_276.91/submission.csv"
-TEST_DIR = "neural-debris-removal-in-streak-detection-models/test_set/test_set"
-RESCUE_DIR = Path("kaggle_outputs/morpho/rescue")
+# Constants (env-overridable for reusing this on other source CSVs)
+FULL_CSV   = os.environ.get("RESCUE_INPUT_CSV", "kaggle_outputs/simple-ft_276.91/submission.csv")
+TEST_DIR   = "neural-debris-removal-in-streak-detection-models/test_set/test_set"
+RESCUE_DIR = Path(os.environ.get("RESCUE_OUTPUT_DIR", "kaggle_outputs/morpho/rescue"))
 RESCUE_DIR.mkdir(parents=True, exist_ok=True)
 
 def main():
@@ -77,9 +77,11 @@ def main():
     # 3. Generate Variants
     print("\n=== Generating Rescue Variants ===")
     variants = [
-        (0.5, 0.05), (0.5, 0.08),
+        (0.5, 0.04), (0.5, 0.05), (0.5, 0.08),
         (0.4, 0.05), (0.4, 0.08),
-        (0.35, 0.05), (0.35, 0.08)
+        (0.35, 0.05), (0.35, 0.08),
+        (0.3, 0.05), (0.2, 0.05),
+        (0.2, 0.06), (0.2, 0.07), (0.2, 0.08)
     ]
     
     # Map image_id to its scored detections for fast lookup

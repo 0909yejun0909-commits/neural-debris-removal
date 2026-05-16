@@ -16,6 +16,10 @@ __pycache__/
 /kaggle/
 submission.csv
 kaggle_outputs/
+*_final_outputs/
+*_kernel/
+kernel-metadata.json
+step-2-simple.ipynb
 proxy/
 .claude/
 "step 2 validation proxy results.zip"
