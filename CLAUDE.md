@@ -28,7 +28,7 @@ Hungarian-matched Confidence-Aware Detection Distance averaged over IoU threshol
 
 All "improved" notebooks assume **the poison lives in the detection head** (`head.cls_subnet`, `head.cls_score`), not the ResNet backbone or FPN. They therefore freeze backbone + FPN and only update the classification subnet. This is an analytical choice, not derivable from the data.
 
-## Submission scoreboard (as of 2026-05-16)
+## Submission scoreboard (as of 2026-05-17)
 
 | Submission | mCADD | Dets/img |
 |---|---|---|
@@ -55,9 +55,23 @@ All "improved" notebooks assume **the poison lives in the detection head** (`hea
 | EWC iter=25 + rescue lf=0.2 dm=0.05 (`kaggle_outputs/step10_ewc_iter25_rescue/simple-ft_rescue_lf0.2_dm0.05.csv`) | 249.62 | 0.346 |
 | GA+FT iter20 avg0.3 raw (`step12_final_outputs/submission_iter20_avg0.3.csv`) — head-only, GA 30 iters + FT 20 iters, mix 0.3 | — | 1.218 |
 | GA+FT iter20 avg0.3 + rescue lf=0.2 dm=0.05 (`kaggle_outputs/step12_iter20_avg0.3_rescue/simple-ft_rescue_lf0.2_dm0.05.csv`) | 262.87 | 0.505 |
-| Tri-voting variants on 235.62 base (`kaggle_outputs/step13_voting/*.csv`) | pending | — |
+| Tri-vote `add_T0.5_minconf0.5` on 235.62 base (`kaggle_outputs/step13_voting/add_T0.5_minconf0.5.csv`) | 241.93 | — |
+| Tri-vote `combo_T0.5_v1` on 235.62 base (`kaggle_outputs/step13_voting/combo_T0.5_v1.csv`) | 261.30 | — |
+| Length-filter ≤ 40 on 235.62 base (`kaggle_outputs/step15_features/filter_length_le_40.00.csv`) | 233.99 | 0.270 |
+| Length-filter ≤ 48.19 on 235.62 base (`kaggle_outputs/step15_features/filter_length_le_48.19.csv`) | 243.11 | 0.214 |
+| Length-filter in [45.2, 51.2] on 235.62 base (`kaggle_outputs/step15_features/filter_length_in_45.2_51.2.csv`) | 234.76 | 0.268 |
+| Length-filter UNCOND-only stack ≤40 OR [45.2,51.2] on 235.62 base (`kaggle_outputs/step15_features/filter_length_uncond_stack_le40_or_45_51.csv`) | 232.63 | 0.247 |
+| **Embedding-distance filter T=0.96 on 232.63 base (`kaggle_outputs/step17_v22_final/filter_emb_final_T0.96.csv`)** | **226.31** | 0.210 |
+| Embedding-distance filter T=0.95 on 232.63 base (`kaggle_outputs/step17_v22_final/filter_emb_final_T0.95.csv`) | 229.52 | 0.183 |
+| Embedding-distance filter T=0.965 on 232.63 base (`kaggle_outputs/step17_finer/filter_emb_T0.965.csv`) | 226.56 | 0.224 |
+| Embedding-distance filter T=0.970 on 232.63 base (`kaggle_outputs/step17_finer/filter_emb_T0.970.csv`) | 226.87 | 0.232 |
+| Length-filter UNCOND-only stack ≤40 OR [44,52] (`kaggle_outputs/step15_features/filter_length_uncond_stack_le40_or_44.0_52.0.csv`) | 234.40 | 0.239 |
+| Length-filter UNCOND-only stack ≤40 OR [47,49] (`kaggle_outputs/step15_features/filter_length_uncond_stack_le40_or_47.0_49.0.csv`) | 233.32 | 0.271 |
+| Combined classifier (length+endpoint_grad+width_uniform+intensity_uniform+area) additive_T0.85 on 232.63 (`kaggle_outputs/step16_combined/additive_T0.85.csv`) | 232.84 | 0.237 |
+| Length-filter UNCOND-only stack ≤41 OR [45.2, 51.2] (`kaggle_outputs/step15_features/filter_length_uncond_stack_le41_or_45.2_51.2.csv`) | 234.93 | 0.244 |
+| Embedding-distance filter T=0.9439 on 235.62 base (`kaggle_outputs/step17b_235base/filter_emb_T0.9439.csv`) | 231.39 | 0.204 |
 
-Bar to beat: **235.62**. Kernel slug for pulling outputs: `jasonkimmmmmmmm/<name>` (e.g. `retinianet`, `step-2-simple`, `step8-surgical-ft`).
+Bar to beat: **226.31**. Kernel slug for pulling outputs: `jasonkimmmmmmmm/<name>` (e.g. `retinianet`, `step-2-simple`, `step8-surgical-ft`).
 
 ## Lessons from submissions
 
@@ -75,7 +89,7 @@ Bar to beat: **235.62**. Kernel slug for pulling outputs: `jasonkimmmmmmmm/<name
 13. **Post-processing space fully exhausted. dm=0.05 is the global optimum on both axes.** dm=0.04 hurt (241.71), dm=0.06 hurt (238.99 — same magnitude as lf=0.4). Dets with d∈(0.05, 0.06] are net negative FPs. **The next gains must come from model-level improvements (better unlearning), not further CSV post-processing.**
 14. **Surgical FT @ 125 iters flattens the entire conf distribution — the rescue recipe doesn't apply.** `step8_kaggle_surgical_ft.py` (head.cls_subnet + cls_score only, 125 iters, lr=1e-4, step decay at iter 100) produced 126 dets with min/median/max = 0.20/0.27/0.55 — **zero dets ≥ 0.6**. Scored 277.19 on raw submission — statistical tie with simple-FT raw (276.91), 0.063 dets/img (below the 0.17 sweet-spot floor). Loss curve confirms over-training: total_loss dropped 0.05 → 0.004 by iter 100, classifier converged to "predict background everywhere." **Implication: empty-label FT is fundamentally a sledgehammer; iter count is the only thing keeping it from collapsing to empty.** Simple-FT survived with usable conf distribution only because it stopped at 20 iters. Surgical FT needs the same — try `FT_ITERS ∈ {25, 50}` to find a usable conf tail before declaring the direction dead.
 19. **GA + FT weight average — densest base ever (855 dets ≥0.6 vs simple-FT's 423), but the extra dets are high-confidence poison residue.** `step12_kaggle_ga_ft.py`: head-only, Phase A = gradient ascent on poison annotations (30 iters, -loss_cls, lr=5e-5), Phase B = empty-label FT from GA checkpoint (sweep iters {20,50,100,150}), Phase C = weight-average GA+FT at mix=0.3. iter20_avg0.3 produced the richest conf distribution of any unlearning method tried (median 0.502, 855 ≥0.6, density 1.218/img). With proven rescue recipe (lf=0.2 dm=0.05) scored **262.87 — 27 points WORSE than 235.62**. Density 0.505/img was 1.6× the proven sweet spot; the 432 extra ≥0.6 dets (vs simple-FT) are residue, not signal. **Why GA failed: GA disrupts response at the 20 specific unlearn-set boxes, but the poisoned head learned a general dashed-streak *pattern* that appears across the test set. The 0.3 weight-avg with FT then re-amplifies residual detections.** Iter trajectory confirms lesson 14: empty-label FT degrades monotonically with iters (iter150 has only 20 dets ≥0.6 vs iter20's 855). Direction dead — same structural issue as EWC's anchor-to-poisoned.
-20. **Tri-model voting diagnostic: alternative methods don't see meaningfully different *high-confidence* dets than simple-FT.** `step13_tri_voting.py` counts agreement between 235.62 base and {surgical iter=25, EWC iter=25} at IoU≥T. Vote histogram: 92.1% of base dets get 2 votes (both alt methods agree), 7.3% get 1 vote, 0.6% (4 dets) get 0 votes. Of 969 consensus-add candidates (in BOTH surgical AND EWC but missing from base), **ZERO have mean conf ≥ 0.6, only 110 have mean conf ≥ 0.5, 364 have mean conf ≥ 0.4**. **Implication: all three methods share the same view of high-conf detections; their disagreement only exists in the low-conf zone, which is dominated by shared poison residue.** Submissions pending (`add_T0.5_minconf0.5`, `drop_T0.5_v1`) test if the small consensus-disagreement deltas matter; expected outcome is ±2 points. **The fundamental ceiling is the shared poisoned head — three unlearners can't see beyond it.** IoU thresholds T∈{0.3, 0.5} produced identical results (matches are solid or absent — same pattern as step9).
+20. **Tri-model voting diagnostic + submissions: alternative methods don't see meaningfully different dets than simple-FT, and acting on their disagreements HURTS.** `step13_tri_voting.py` counts agreement between 235.62 base and {surgical iter=25, EWC iter=25} at IoU≥T. Vote histogram: 92.1% of base dets get 2 votes (both alt methods agree), 7.3% get 1 vote, 0.6% (4 dets) get 0 votes. Of 969 consensus-add candidates (in BOTH surgical AND EWC but missing from base), ZERO have mean conf ≥ 0.6, only 110 have mean conf ≥ 0.5, 364 have mean conf ≥ 0.4. **Submission outcomes confirm the diagnostic: `add_T0.5_minconf0.5` scored 241.93 (+6.3 worse), `combo_T0.5_v1` scored 261.30 (+25.7 worse).** The 110 consensus-add candidates at conf ≥ 0.5 are **predominantly poison residue** — all three methods share the same blind spot. **The fundamental ceiling is the shared poisoned head — three unlearners can't see beyond it.** IoU thresholds T∈{0.3, 0.5} produced identical results (matches are solid or absent — same pattern as step9). **Direction dead.**
 18. **Pixel-content post-processing exhausted — general-purpose "looks like a streak" features can't separate poison from real.** Step11 computed SNR (box brightness vs surrounding ring) and structure-tensor coherence (gradient direction coherence) for the unlearn-set poison annotations vs the 235.62 CSV dets. **Poison scores HIGHER on both features than the CSV dets** — SNR med 0.386 (poison) vs 0.297 (CSV unconditional) vs 0.230 (CSV rescued); coherence med 0.483 vs 0.439 vs 0.398. Reason: unlearn-set poison was designed *to look streak-like*, so general streak-shape metrics select FOR poison, not against it. Filter variants at any usable threshold destroy density disproportionately (snr≥0.5 leaves only 175 dets, 0.087/img). **Why dashedness was the exception: it targets a *specific poison signature* (dashed/segmented pattern), not general streak shape. The right pixel features for this task must target poison artifacts, not real-streak resemblance.** Geometric micro-ops also exhausted (no duplicates, no tiny boxes, edge dets statistically equivalent). **Post-processing space on the 235.62 CSV is genuinely exhausted.**
 17. **EWC-lite (L2-anchor to poisoned weights, λ=100) preserves poison residue, not real streaks.** Step10 trained head.cls_score only with `L = focal_loss(empty) + λ·Σ(w − w_orig)²` for 25 iters. Output was the richest model CSV yet: 2146 dets at 1.073/img, **502 dets at conf≥0.6** (vs simple-FT raw's 423). But after the proven rescue recipe (lf=0.2 dm=0.05), scored **249.62 — 14 points worse than simple-FT at the same recipe (235.62)**. The 79 extra ≥0.6 dets and 191 rescued dets are dominantly poison residue. **Root cause: the anchor is to the poisoned weights** — that model is equally good at detecting real streaks AND poison residue, so L2-anchoring preserves both indiscriminately. True (Fisher-weighted) EWC would anchor by importance to a *clean* task, which we don't have. Author's "too many FPs → lower λ" rule means optimal λ → 0, which degrades EWC into simple-FT. **L2-anchor-to-poisoned is structurally wrong for this unlearning problem.** Don't waste more compute on λ sweeps.
 16. **Surgical iter=25 as a filter on simple-FT rescue is redundant.** Step9 ensemble test: filter the 235.62 winning CSV by "keep simple-FT det iff surgical iter=25 has any det with IoU≥T at same location." All three T ∈ {0.1, 0.3, 0.5} produced identical 581-det results (matches are either solid IoU>0.5 or absent — no marginal IoU cases). Dropped 49 dets (8%) → scored 236.20 (−0.58 vs 235.62). **Net effect ≈ noise**; the 49 dropped dets were slightly biased toward "real streaks surgical missed" rather than "poison residue surgical caught." Implication: simple-FT rescue already captures ~all the signal that surgical's classifier knows about. **Surgical direction fully exhausted across all configurations** (standalone best 248.60, filter best 236.20). Further gains require fundamentally different unlearning math (EWC, GA+FT weight avg), not more variants of empty-label FT.
@@ -83,6 +97,42 @@ Bar to beat: **235.62**. Kernel slug for pulling outputs: `jasonkimmmmmmmm/<name
 7. **Loss-difference trick has a normalization flaw.** `loss_cls(empty) − loss_cls(poison)` was intended to cancel background-anchor gradients. RetinaNet's focal loss normalizes by `max(num_pos, 1)` — that's `1` in empty mode and `N` in poison mode, so the cancellation breaks and the empty-mode term dominates. This is why targeted-bbox over-suppresses to 0.17 dets/img instead of the intended ~1.9.
 8. **Kernel `.log` files come back 0 bytes** unless the script explicitly tees stdout to a file in `/kaggle/working/`. Every Kaggle script should do this so we can read loss curves after the fact.
 9. **Pull outputs with:** `kaggle.exe kernels output jasonkimmmmmmmm/<slug> -p kaggle_outputs/<name>_<score>`. Ignore the cp1252 exit-1 — files still download. For direct CSV submissions, use `kaggle.exe competitions submit -c neural-debris-removal-in-streak-detection-models -f <csv> -m "<msg>"`.
+
+## Strategic pivot (2026-05-17): forward use of the 20 labeled poison examples
+
+After exhausting backward/gradient-based use of the unlearn set (simple-FT, surgical FT, EWC, GA+FT, tri-voting), the binding constraint is now clear:
+
+- **The poison is a learned pattern (dashed streaks), not memorization at the 20 specific boxes.** Any fine-tune of the poisoned head produces variations on the same theme — high-conf dets are 92% shared across all three unlearners (lesson 20).
+- **The only positively-scoring lever ever found (+7.75 points, dashedness rescue) operates on a direct *pixel signature* of the poison at test time, not on model confidence.**
+- All "fix the model" approaches are bounded by what the compromised head can express.
+
+**New working principle: use the 20 labeled poison annotations as direct test-time signatures, not as fine-tuning signal.** The 235.62 base CSV stays — we filter / re-rank it using poison templates and pixel/feature similarity.
+
+### Three directions in priority order
+
+1. **Template-matching post-filter** (cheapest, never tried)
+   - Extract pixel patches from the 20 unlearn-set bboxes (rotated to canonical streak-axis orientation)
+   - For each det in the 235.62 base CSV, extract its bbox patch in the same canonical form
+   - Score by normalized cross-correlation (or SSIM) to nearest template
+   - Drop dets above similarity threshold T; sweep T
+2. **Embedding-space poison distance using the poisoned model's own features**
+   - Pull ResNet backbone / FPN features at the 20 unlearn-set bbox locations → 20 poison embedding vectors
+   - For each test-set det, pull features at its location → embedding
+   - Compute cosine distance to nearest poison template; threshold sweep
+   - Rationale: the poisoned model's internal representation should cluster poison together — use that geometry against itself
+3. **Expand the pixel-signature library beyond dashedness**
+   - Compute candidate features on the 20 poison annotations vs the rescued-likely-real dets (~56 from `lf=0.5 dm=0.05`)
+   - Keep features that visibly separate the distributions (width variance, intensity-profile flatness, endpoint sharpness, aspect ratio, image-position bias)
+   - Stack separating features into a small linear classifier (logistic regression on ~20 + ~56 examples — guard against overfit with leave-one-out CV)
+
+### What is OFF the table
+
+- Further empty-label fine-tuning variants (full / surgical / EWC / GA+FT — all dead, see lessons 14, 17, 19)
+- Voting / ensembling between unlearners (lesson 20 — dead)
+- Global confidence thresholding or scaling on the 235.62 CSV (lesson 13 — exhausted)
+- General-purpose "streak-likeness" pixel features (lesson 18 — poison scores HIGHER on these)
+
+If all three directions above fail to beat 235.62, the score floor for this competition under the current dataset is real and the work is done.
 
 ## Architecture must-match values
 
