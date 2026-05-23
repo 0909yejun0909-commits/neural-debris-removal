@@ -50,7 +50,9 @@
 | Embedding-distance filter T=0.965 (`kaggle_outputs/step17_finer/filter_emb_T0.965.csv`) | 226.56 (+0.25 vs T=0.96 — local optimum confirmed at T=0.96; relaxation slope much flatter than tightening) |
 | Embedding-distance filter T=0.970 (`kaggle_outputs/step17_finer/filter_emb_T0.970.csv`) | 226.87 (+0.56 vs T=0.96 — relaxation slope ~50 pts/unit-T, tightening slope ~320 pts/unit-T; strongly asymmetric) |
 | Embedding-distance filter T=0.9439 on 235.62 base (`kaggle_outputs/step17b_235base/filter_emb_T0.9439.csv`) | 231.39 (+5.08 vs 226.31 — length+embedding are complementary, not redundant; 232.63 base remains the right starting point for embedding) |
-| Embedding-distance filter Step 17c (233.32 base) | (pending submission) `kaggle_outputs/step17c_233base/` |
+| Embedding-distance filter T=0.9523 on 233.32 base (`kaggle_outputs/step17c_233base/filter_emb_T0.9523.csv`) | 227.84 (+1.53 vs 226.31 — 233.32 base is marginal; 232.63 remains structurally the right base) |
+| Embedding filter Step 18 (cls_score, 232.63 base) | (pending submission) `kaggle_outputs/step18_cls_score/` |
+| Embedding filter Step 18 `cls_score` layer on 232.63 base — NOT SUBMITTED | 9-d cls_score features collapse after L2-norm. Sim range 0.0009 across all 495 dets; Uncond/Rescued median gap 0.000006 (vs 0.012 on cls_subnet[-1]). Direction dead. |
 
 Lower is better. Bar to beat: **226.31**.
 

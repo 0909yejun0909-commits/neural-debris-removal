@@ -70,6 +70,13 @@ All "improved" notebooks assume **the poison lives in the detection head** (`hea
 | Combined classifier (length+endpoint_grad+width_uniform+intensity_uniform+area) additive_T0.85 on 232.63 (`kaggle_outputs/step16_combined/additive_T0.85.csv`) | 232.84 | 0.237 |
 | Length-filter UNCOND-only stack ≤41 OR [45.2, 51.2] (`kaggle_outputs/step15_features/filter_length_uncond_stack_le41_or_45.2_51.2.csv`) | 234.93 | 0.244 |
 | Embedding-distance filter T=0.9439 on 235.62 base (`kaggle_outputs/step17b_235base/filter_emb_T0.9439.csv`) | 231.39 | 0.204 |
+| Embedding-distance filter T=0.9523 on 233.32 base (`kaggle_outputs/step17c_233base/filter_emb_T0.9523.csv`) | 227.84 | 0.203 |
+| Embedding `cls_score` layer on 232.63 base — NOT SUBMITTED. 9-d features collapse after L2-norm; sim range 0.0009, Uncond/Rescued median gap 0.000006 (vs 0.012 on cls_subnet[-1]). Direction dead. | — | — |
+| Per-cohort Tu=0.96 Tr=keepall on 232.63 base (`kaggle_outputs/step19_percohort/filter_emb_Tu0.96_Tr_keepall.csv`) | 228.30 | 0.221 |
+| Per-cohort Tu=0.95 Tr=0.96 on 232.63 base (`kaggle_outputs/step19_percohort/filter_emb_Tu0.95_Tr0.96.csv`) | 229.65 | 0.193 |
+| Combo emb T=0.96 + width_var p95 on 232.63 base (`kaggle_outputs/step20_pixel_features/filter_combo_embT0.96_OR_wv_p95_T0.2502.csv`) | 227.33 | 0.198 |
+| Combo emb T=0.96 + (width_var AND asymmetry) p90 on 232.63 base (`kaggle_outputs/step20_pixel_features/filter_combo_embT0.96_OR_wvANDasy_p90.csv`) | 227.29 | 0.202 |
+| Combo emb T=0.96 + template NCC T=0.88 on 232.63 base (`kaggle_outputs/step21_template_local/combo_emb0.96_OR_ncc0.88.csv`) | 229.97 | 0.199 |
 
 Bar to beat: **226.31**. Kernel slug for pulling outputs: `jasonkimmmmmmmm/<name>` (e.g. `retinianet`, `step-2-simple`, `step8-surgical-ft`).
 
@@ -133,6 +140,20 @@ After exhausting backward/gradient-based use of the unlearn set (simple-FT, surg
 - General-purpose "streak-likeness" pixel features (lesson 18 — poison scores HIGHER on these)
 
 If all three directions above fail to beat 235.62, the score floor for this competition under the current dataset is real and the work is done.
+
+## Strategic update (2026-05-23): all three pivot directions exhausted, 226.31 is the floor on contaminated features
+
+After exhausting embedding (direction #2) at **226.31**, then testing direction #1 (template NCC) and direction #3 (pixel features), both new directions failed to beat 226.31. Five subsequent combo/per-cohort variants all lost between +0.98 and +3.66 points. Pattern:
+
+- Per-cohort threshold tightening: lost (the 21 rescued cohort dets at sim ≥ 0.96 are mostly poison; the 34 uncond dets at sim ∈ [0.95, 0.96) are mostly real).
+- Pixel features (width_var, asymmetry): correlated (r=0.41), each ~10% poison concentration in their top tails. Insufficient to overcome density penalty.
+- Template NCC: drops with zero poison enrichment (real streaks share canonical shape with poison templates after PCA-aligned canonicalization — lesson 18 reaffirmed).
+
+**Root cause identified:** every feature space tried so far is **derived from the poisoned model itself**. The poisoned head represents real streaks and poison residue similarly — contamination lives in the representation we're using to detect contamination.
+
+**Next direction (Phase 2 of `witty-sniffing-hamming` plan):** external, uncontaminated feature space via DINOv2. The vision foundation model has never seen the poison pattern; its embedding space is uncorrelated with the poisoned model's. If poison differs from real streaks in natural-image feature geometry, DINOv2 sees it where every contaminated method has been blind. Implementation: `step24_dinov2.py`. **In progress.**
+
+**Fallback (Phase 3) if DINOv2 fails:** training-time embedding loss using cls_subnet[-1] templates to push the head AWAY from poison in the proven-good representation.
 
 ## Architecture must-match values
 
